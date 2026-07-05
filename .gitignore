@@ -1,0 +1,47 @@
+# Dependencies — never commit these, they are huge and rebuilt by npm install
+node_modules/
+
+# Environment files — contain secrets, never commit
+.env
+.env.local
+.env.production
+
+# package-lock.json IS committed intentionally.
+# It locks exact dependency versions for reproducible installs.
+# DO NOT add package-lock.json here.
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build output — generated at CI time, not stored in git
+build/
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+.nyc_output
+coverage/
+
+# Terraform state and secrets — NEVER commit these
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+# ^ tfvars contains grafana_admin_password — keep out of git
+# Commit terraform.tfvars.example instead (with placeholder values)
+
+# Kubernetes secrets — never commit real secret values
+k8s/secrets/backend-secret.yaml
+# ^ contains MONGODB_URI and JWT secrets
+# The template file is committed, but once you fill in real values
+# add it to .gitignore so you don't accidentally push credentials
+
+# IDE
+.vscode/
+.idea/
+*.swp

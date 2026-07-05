@@ -1,0 +1,131 @@
+# ============================================================
+# FILE: k8s/frontend/deployment.yaml
+# PURPOSE: Runs the React/Nginx frontend containers.
+#
+# KEY DIFFERENCE FROM BACKEND:
+# The frontend container is a static Nginx server.
+# There is no runtime config to inject — the React build
+# is baked into the Docker image at CI/CD time.
+# The REACT_APP_API_URL was embedded during "npm run build"
+# inside the Dockerfile. No env vars needed at runtime.
+# This means the frontend Deployment is simpler —
+# no envFrom, no secrets, no configmaps.
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: shakachow-frontend
+  namespace: shakachow
+  labels:
+    app: shakachow-frontend
+    tier: frontend
+    environment: production
+
+spec:
+
+  replicas: 2
+  # 2 Nginx pods, one per AZ.
+  # Nginx is very lightweight (~5MB RAM per pod) so these
+  # are cheap to run. HPA scales up during traffic peaks.
+
+  selector:
+    matchLabels:
+      app: shakachow-frontend
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      # Never have zero healthy frontend pods.
+      # Users always have an Nginx pod serving the React app.
+      maxSurge: 1
+      # Up to 3 pods exist simultaneously during update.
+
+  template:
+    metadata:
+      labels:
+        app: shakachow-frontend
+        tier: frontend
+
+    spec:
+      terminationGracePeriodSeconds: 30
+      # Nginx handles this gracefully — it finishes active
+      # connections before shutting down.
+
+      # Spread frontend pods across AZs, same as backend.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: shakachow-frontend
+
+      containers:
+        - name: frontend
+          # Container name — used in logs and kubectl set image.
+
+          image: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/shakachow-frontend:latest
+          # CI/CD replaces :latest with the exact SHA tag.
+          # kubectl set image deployment/shakachow-frontend \
+          #   frontend=ACCOUNT.dkr.ecr.REGION.amazonaws.com/shakachow-frontend:abc1234
+
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 80
+              # Nginx listens on port 80 inside the container.
+              # This matches the EXPOSE 80 in the frontend Dockerfile.
+              protocol: TCP
+
+          # Frontend needs NO environment variables at runtime.
+          # The React app is pre-compiled static HTML/CSS/JS.
+          # The API URL was baked in during: npm run build
+
+          resources:
+            requests:
+              memory: "32Mi"
+              # Nginx serving static files uses ~20-30MB RAM.
+              # Much lighter than the Node.js backend.
+              cpu: "50m"
+              # 50 millicores = 0.05 CPU. Nginx is extremely
+              # efficient at serving static content.
+            limits:
+              memory: "64Mi"
+              # 64MB is generous for Nginx + static files.
+              cpu: "200m"
+              # 200 millicores. If Nginx is CPU-throttled,
+              # it means extremely high concurrent connections —
+              # HPA will add more pods before this is hit.
+
+          # readinessProbe: checks if Nginx is ready to serve traffic.
+          # Nginx exposes /health (configured in nginx.conf).
+          readinessProbe:
+            httpGet:
+              path: /health
+              # nginx.conf has: location /health { return 200 'ok'; }
+              port: 80
+            initialDelaySeconds: 5
+            # Nginx starts fast — 5 seconds is plenty.
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5 && nginx -s quit"]
+                # nginx -s quit: graceful shutdown — Nginx finishes
+                # all active connections before exiting.
+                # The 5 second sleep gives kube-proxy time to stop
+                # routing new requests to this pod first.

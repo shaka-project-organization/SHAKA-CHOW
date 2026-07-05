@@ -1,0 +1,66 @@
+# ============================================================
+# FILE: k8s/backend/service.yaml
+# PURPOSE: Creates a stable network endpoint for the backend pods.
+#
+# WHY SERVICES ARE NEEDED:
+# Pods are ephemeral — they are created and destroyed constantly
+# (deployments, crashes, scaling events). Each new pod gets a
+# different IP address. If the frontend or ALB tried to talk
+# directly to pod IPs, they would need to track pod lifecycles.
+# A Service provides a STABLE virtual IP (ClusterIP) that never
+# changes, and Kubernetes automatically routes traffic from the
+# Service to whichever pods are currently healthy.
+# ============================================================
+
+apiVersion: v1
+kind: Service   # Core networking abstraction
+
+metadata:
+  name: shakachow-backend-svc
+  # This name is used in the Ingress routing rule:
+  # backend.service.name: shakachow-backend-svc
+  # It's also the DNS name inside the cluster:
+  # shakachow-backend-svc.shakachow.svc.cluster.local
+
+  namespace: shakachow
+
+  labels:
+    app: shakachow-backend
+    tier: backend
+
+spec:
+
+  type: ClusterIP
+  # ClusterIP = internal-only Service. The virtual IP assigned
+  # is only reachable from INSIDE the cluster.
+  # This is correct because the backend is not directly
+  # internet-facing — only the ALB (via Ingress) reaches it.
+  #
+  # Other types:
+  #   NodePort      → opens a port on every node (not for prod)
+  #   LoadBalancer  → creates a cloud load balancer (costs money,
+  #                   we use one ALB for everything via Ingress instead)
+  #   ExternalName  → DNS alias to external service
+
+  # selector: which pods this Service routes traffic to.
+  # Kubernetes watches for pods with these labels and adds/removes
+  # them from the Service's endpoint list as they appear/disappear.
+  selector:
+    app: shakachow-backend
+    # This matches the pods created by the backend Deployment.
+    # Any pod with label "app: shakachow-backend" receives traffic.
+
+  ports:
+    - name: http
+      protocol: TCP
+
+      port: 80
+      # The port THIS SERVICE listens on inside the cluster.
+      # Other services call: http://shakachow-backend-svc:80/api/health
+      # The Ingress forwards /api/* to port 80 on this Service.
+
+      targetPort: 5000
+      # The port the CONTAINER is listening on.
+      # Kubernetes translates: Service port 80 → Pod port 5000.
+      # This lets you change the container port without updating
+      # anything that talks to the Service.

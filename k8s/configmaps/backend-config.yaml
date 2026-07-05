@@ -1,0 +1,64 @@
+# ============================================================
+# FILE: k8s/configmaps/backend-config.yaml
+# PURPOSE: Stores non-sensitive environment variables for the
+# backend pods. ConfigMaps hold plain text configuration —
+# NEVER put passwords, tokens, or connection strings here.
+# Those go in Secrets (backend-secret.yaml).
+#
+# CONFIGMAP vs SECRET:
+#   ConfigMap → plain text, visible in kubectl describe,
+#               stored unencrypted in etcd.
+#   Secret    → base64 encoded (NOT encrypted by default),
+#               masked in kubectl describe output,
+#               can be encrypted at rest with KMS.
+# ============================================================
+
+apiVersion: v1       # Core Kubernetes API
+kind: ConfigMap      # The resource type
+
+metadata:
+  name: backend-config
+  # Name referenced by the backend Deployment's envFrom field.
+  # Must match exactly: envFrom.configMapRef.name: backend-config
+
+  namespace: shakachow
+  # Must be in the same namespace as the pods that use it.
+
+  labels:
+    app: shakachow-backend
+    component: config
+
+# data: the actual key-value configuration.
+# Each key becomes an environment variable in the pod.
+# Syntax: KEY: "value"
+data:
+
+  NODE_ENV: "production"
+  # Tells Express.js it is running in production mode.
+  # In production mode:
+  #   - Stack traces are hidden from API error responses
+  #   - Morgan logging uses the "combined" format
+  #   - Performance optimisations are enabled
+
+  PORT: "5000"
+  # The port the Express server listens on inside the container.
+  # The Kubernetes Service maps external requests to this port.
+  # Matches the EXPOSE 5000 in the backend Dockerfile.
+
+  JWT_EXPIRES_IN: "15m"
+  # Access token lifetime — 15 minutes.
+  # Short expiry limits the damage if a token is stolen.
+  # After 15 minutes, the client must use the refresh token
+  # to get a new access token from /api/auth/refresh.
+
+  JWT_REFRESH_EXPIRES_IN: "7d"
+  # Refresh token lifetime — 7 days.
+  # After 7 days, the user must log in again.
+  # Striking a balance: long enough for convenience,
+  # short enough to limit exposure from a stolen refresh token.
+
+  CLIENT_URL: "https://shakachow.engrshakacloud.online"
+  # The frontend URL passed to Express CORS middleware.
+  # Only requests from this origin are allowed by the
+  # CORS policy — all other origins are rejected.
+  # This prevents other websites from calling your API.

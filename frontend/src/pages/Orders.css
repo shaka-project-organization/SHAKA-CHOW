@@ -1,0 +1,43 @@
+.orders-page { padding: 2rem 1.5rem 4rem; }
+.orders-empty { padding: 5rem 1.5rem; text-align: center; }
+.orders-empty h2 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.orders-empty p  { color: var(--gray-600); }
+
+.orders-title { font-size: 26px; font-weight: 700; margin-bottom: 1.5rem; }
+
+.orders-list { display: flex; flex-direction: column; gap: 12px; }
+
+.order-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--gray-200);
+  background: var(--white);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.order-row:hover { border-color: var(--gold); box-shadow: var(--shadow-sm); }
+
+.order-row-left { display: flex; align-items: center; gap: 14px; }
+
+.order-rest-emoji { font-size: 32px; }
+
+.order-rest-name { font-size: 15px; font-weight: 600; color: var(--navy); }
+.order-meta { font-size: 13px; color: var(--gray-400); margin-top: 2px; }
+
+/* Status badges */
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.badge-green  { background: #dcfce7; color: #14532d; }
+.badge-gold   { background: var(--gold-pale); color: #8a5d00; }
+.badge-blue   { background: #dbeafe; color: #1e3a8a; }
+.badge-yellow { background: #fef9c3; color: #713f12; }
+.badge-red    { background: #fee2e2; color: #991b1b; }

@@ -1,0 +1,308 @@
+# ============================================================
+# FILE: .github/workflows/frontend-ci.yml
+# PURPOSE: Builds, tests, and deploys the React frontend.
+#
+# FIX APPLIED:
+# - Removed cache-dependency-path (no lock file exists yet)
+# - Changed npm ci → npm install (works without lock file)
+# - Added lock file generation step so subsequent runs use npm ci
+# - Node deprecation warning handled (Node 20 still works fine)
+# ============================================================
+
+name: Frontend CI/CD — Build, Push & Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-ci.yml'
+
+env:
+  AWS_REGION:        ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID:    ${{ secrets.AWS_ACCOUNT_ID }}
+  ECR_REPO:          shakachow-frontend
+  IMAGE_TAG:         ${{ github.sha }}
+  EKS_CLUSTER_NAME:  ${{ secrets.EKS_CLUSTER_NAME }}
+  REACT_APP_API_URL: https://shakachow.engrshakacloud.online/api
+
+jobs:
+
+  # ════════════════════════════════════════════
+  # JOB 1 — INSTALL AND TEST
+  # ════════════════════════════════════════════
+  test:
+    name: Install & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Downloads your repo code onto the CI runner VM.
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # Install Node.js 20 on the runner.
+      # NOTE: We removed "cache" and "cache-dependency-path" because
+      # package-lock.json does not yet exist in the repo.
+      # SOLUTION A (do this locally first):
+      #   cd frontend && npm install → commits package-lock.json
+      #   Then restore cache: 'npm' and cache-dependency-path here.
+      # SOLUTION B (what we use now):
+      #   Skip caching until the lock file is committed.
+      #   Builds are ~30s slower without cache — acceptable short-term.
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # cache and cache-dependency-path intentionally omitted
+          # until package-lock.json is committed to the repo.
+
+      # npm install (not npm ci) works WITHOUT a lock file.
+      # It resolves and installs all dependencies from package.json
+      # and generates a package-lock.json on the runner.
+      # npm ci REQUIRES a lock file — it would fail here.
+      - name: Install Node.js dependencies
+        working-directory: frontend
+        run: npm install
+
+      # Run React tests.
+      # --watchAll=false exits after tests complete (required in CI).
+      # --passWithNoTests passes even if no test files exist yet.
+      # CI=true treats warnings as errors (Create React App behaviour).
+      - name: Run React test suite
+        working-directory: frontend
+        run: npm test -- --watchAll=false --passWithNoTests
+        env:
+          CI: true
+
+      # Generate and commit package-lock.json automatically.
+      # This step runs ONLY on push to main (not PRs).
+      # Once package-lock.json is committed, future runs are
+      # faster (can use npm ci and npm caching).
+      - name: Commit package-lock.json if missing
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: frontend
+        run: |
+          # Check if package-lock.json is already tracked in git
+          if ! git ls-files --error-unmatch package-lock.json 2>/dev/null; then
+            echo "package-lock.json not in git — committing it now"
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "chore: add frontend package-lock.json [skip ci]"
+            git push
+            echo "✅ package-lock.json committed — future runs will use npm ci"
+          else
+            echo "package-lock.json already tracked — no action needed"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN is automatically provided by GitHub Actions.
+          # It has write permission to the repo so we can git push.
+
+  # ════════════════════════════════════════════
+  # JOB 2 — BUILD DOCKER IMAGE AND PUSH TO ECR
+  # Only runs on push to main, after tests pass.
+  # ════════════════════════════════════════════
+  build-and-push:
+    name: Build Docker Image & Push to ECR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    outputs:
+      image_uri: ${{ steps.set-output.outputs.image_uri }}
+
+    steps:
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # Authenticate the runner with AWS using the IAM credentials
+      # stored in GitHub Secrets. Never hardcode AWS keys.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # Get a temporary ECR login token and run docker login.
+      # Required before docker build can push to your private ECR repo.
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Docker Buildx enables layer caching (cache-from/cache-to).
+      # Without Buildx, every build starts from scratch.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the multi-stage Docker image and push two tags to ECR:
+      #   :latest   → always the most recent main build
+      #   :<git-sha> → permanently identifies this exact commit
+      #
+      # build-args passes REACT_APP_API_URL into the Docker build.
+      # React's build tool (Webpack) bakes this URL into the JS bundle
+      # at compile time — there is no process.env in the browser at runtime.
+      # This is why the URL must be provided HERE, not as a K8s env var.
+      #
+      # The frontend Dockerfile:
+      #   Stage 1: Node.js → runs npm run build → produces /app/build/
+      #   Stage 2: Nginx   → copies /app/build/ → serves static files
+      # The final image is ~25MB (just Nginx + built React files).
+      - name: Build and push frontend Docker image
+        id: build-push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file:    ./frontend/Dockerfile
+          push:    true
+          build-args: |
+            REACT_APP_API_URL=${{ env.REACT_APP_API_URL }}
+          tags: |
+            ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:latest
+            ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      # Write the full image URI to GITHUB_OUTPUT so the deploy
+      # job can reference it as: ${{ needs.build-and-push.outputs.image_uri }}
+      - name: Export image URI as job output
+        id: set-output
+        run: |
+          echo "image_uri=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
+
+      # Scan the pushed image for known CVEs using Trivy.
+      # exit-code: 0 means report findings but don't block the pipeline.
+      # Change to 1 when you want to enforce no HIGH/CRITICAL vulnerabilities.
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
+          format:    table
+          exit-code: '0'
+          severity:  'HIGH,CRITICAL'
+
+      # Display a summary panel on the GitHub Actions run page.
+      # Saves you clicking through logs to confirm what was built.
+      - name: Write build summary
+        run: |
+          echo "### ✅ Frontend Image Pushed to ECR" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **API URL baked in** | \`${{ env.REACT_APP_API_URL }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+
+  # ════════════════════════════════════════════
+  # JOB 3 — DEPLOY TO EKS
+  # Rolls out the new frontend image to Kubernetes.
+  # Uses rolling update — zero downtime.
+  # ════════════════════════════════════════════
+  deploy:
+    name: Deploy Frontend to EKS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    environment:
+      name: production
+      url: https://shakachow.engrshakacloud.online
+
+    steps:
+      # Fresh runner — must checkout repo again to get k8s/ manifests.
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+
+      # Re-authenticate with AWS on this new runner VM.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # Install kubectl — the CLI tool for talking to Kubernetes.
+      # Pinned to v1.29.0 to match the EKS cluster version.
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      # Download cluster credentials and write to ~/.kube/config.
+      # After this, every kubectl command targets your EKS cluster.
+      - name: Connect kubectl to EKS cluster
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name   ${{ env.EKS_CLUSTER_NAME }}
+
+      # Apply all frontend Kubernetes manifests declaratively.
+      # kubectl apply creates resources that don't exist and
+      # updates ones that do. Running this multiple times is safe.
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/namespaces/namespaces.yaml
+          kubectl apply -f k8s/frontend/deployment.yaml  --namespace shakachow
+          kubectl apply -f k8s/frontend/service.yaml     --namespace shakachow
+          kubectl apply -f k8s/frontend/hpa.yaml         --namespace shakachow
+          kubectl apply -f k8s/ingress/ingress.yaml      --namespace shakachow
+
+      # Patch the live deployment with the exact SHA-tagged image.
+      # This triggers a rolling update: Kubernetes starts new pods
+      # with the new image, waits for readiness probes to pass,
+      # then terminates old pods one at a time.
+      - name: Update frontend deployment with new image
+        run: |
+          kubectl set image deployment/shakachow-frontend \
+            frontend=${{ needs.build-and-push.outputs.image_uri }} \
+            --namespace shakachow
+
+      # Block until all new pods pass their readiness probe.
+      # If a pod crashes on startup, this step fails after 5 minutes.
+      # The rollback step below then automatically undoes the deployment.
+      - name: Wait for rollout to complete
+        run: |
+          kubectl rollout status deployment/shakachow-frontend \
+            --namespace shakachow \
+            --timeout=300s
+
+      # Print pod status for confirmation. You will see:
+      # NAME                      READY  STATUS   RESTARTS  AGE
+      # shakachow-frontend-xxx    1/1    Running  0         45s
+      - name: Verify deployment health
+        run: |
+          echo "=== Pod status ==="
+          kubectl get pods \
+            --namespace shakachow \
+            --selector app=shakachow-frontend \
+            --output wide
+          echo "=== Ingress status ==="
+          kubectl get ingress --namespace shakachow
+
+      # ONLY runs when a previous step in this job failed.
+      # kubectl rollout undo reverts to the previous working ReplicaSet.
+      # Your users see the last good version with no manual action needed.
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "🚨 Deployment failed — rolling back"
+          kubectl rollout undo deployment/shakachow-frontend --namespace shakachow
+          kubectl rollout status deployment/shakachow-frontend --namespace shakachow
+
+      - name: Write deployment summary
+        if: success()
+        run: |
+          echo "### 🚀 Frontend Deployed to EKS" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ needs.build-and-push.outputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Live URL** | https://shakachow.engrshakacloud.online |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,38 @@
+# ============================================================
+# FILE: k8s/frontend/service.yaml
+# PURPOSE: Stable internal endpoint for frontend Nginx pods.
+# The Ingress routes /* to this Service, which load-balances
+# across all healthy frontend pods.
+# ============================================================
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: shakachow-frontend-svc
+  # The Ingress backend references this name:
+  # backend.service.name: shakachow-frontend-svc
+
+  namespace: shakachow
+
+  labels:
+    app: shakachow-frontend
+    tier: frontend
+
+spec:
+  type: ClusterIP
+  # Internal only. The ALB (created by Ingress) is the
+  # public entry point — it forwards to this ClusterIP Service.
+
+  selector:
+    app: shakachow-frontend
+    # Routes to all pods with this label — the frontend Deployment's pods.
+
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      # Service listens on port 80.
+      # Ingress backend: port.number: 80
+      targetPort: 80
+      # Forward to container port 80 where Nginx listens.

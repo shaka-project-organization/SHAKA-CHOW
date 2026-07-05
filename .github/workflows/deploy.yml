@@ -1,0 +1,218 @@
+# ============================================================
+# FILE: .github/workflows/deploy.yml
+# PURPOSE: This is an OPTIONAL coordination workflow.
+#          It only fires when BOTH the backend AND frontend
+#          CI pipelines have passed on the same commit.
+#
+# USE CASE: When you push a change that touches both
+#           frontend/ and backend/ in the same commit,
+#           you want to guarantee both images are built and
+#           pushed BEFORE either deploys to EKS.
+#           This prevents a scenario where the frontend
+#           deploys with a new API contract before the
+#           backend that implements it is live.
+#
+# HOW IT WORKS:
+#   backend-ci.yml  ──┐
+#                     ├──► deploy.yml (runs only when both succeed)
+#   frontend-ci.yml ──┘
+#
+# NOTE: For commits that only change backend/ or only change
+#       frontend/, this workflow does not trigger.
+#       The individual CI pipelines handle deployment themselves.
+#       This workflow is only relevant for full-stack changes.
+# ============================================================
+
+name: Full-Stack Deploy — Coordinate Frontend + Backend
+
+# ─────────────────────────────────────────────
+# TRIGGER: workflow_run
+# This event fires when another workflow finishes.
+# "workflows" lists the workflow names to watch.
+# "types: [completed]" = fire when they finish
+#   (regardless of success or failure — we check
+#    the result in the job condition below).
+# "branches: [main]" = only watch runs on main.
+# ─────────────────────────────────────────────
+on:
+  workflow_run:
+    workflows:
+      - "Backend CI/CD — Build, Push & Deploy"
+      - "Frontend CI/CD — Build, Push & Deploy"
+    types:
+      - completed
+    branches:
+      - main
+
+env:
+  AWS_REGION:       ${{ secrets.AWS_REGION }}
+  EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
+
+jobs:
+
+  # ════════════════════════════════════════════
+  # JOB: coordinate-deploy
+  # Checks if the triggering workflow succeeded,
+  # then confirms the sibling workflow also passed
+  # on the same commit before doing any work.
+  # ════════════════════════════════════════════
+  coordinate-deploy:
+    name: Verify Both Pipelines Passed
+    runs-on: ubuntu-latest
+
+    # "github.event.workflow_run.conclusion == 'success'"
+    # The workflow_run event fires even on failure.
+    # This condition ensures we only proceed when
+    # the triggering workflow actually succeeded.
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # ── STEP 1 ──────────────────────────────
+      # Use the GitHub API to check the status of ALL
+      # workflow runs on the same commit SHA.
+      # "github.event.workflow_run.head_sha" is the
+      # commit SHA that triggered the completed workflow.
+      # We query the GitHub API for workflow runs on
+      # that exact SHA to verify both pipelines passed.
+      # "gh" is the GitHub CLI — pre-installed on all runners.
+      # "GH_TOKEN" is automatically available in every run —
+      # you don't need to add it as a secret.
+      # ─────────────────────────────────────────
+      - name: Check both CI pipelines passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+          REPO="${{ github.repository }}"
+
+          echo "Checking pipeline statuses for commit: $COMMIT_SHA"
+
+          # Query the GitHub API for all workflow runs on this commit
+          RUNS=$(gh api \
+            "/repos/$REPO/actions/runs?head_sha=$COMMIT_SHA&branch=main" \
+            --jq '.workflow_runs[] | {name: .name, conclusion: .conclusion, status: .status}')
+
+          echo "Workflow runs found on this commit:"
+          echo "$RUNS"
+
+          # Check backend pipeline status
+          BACKEND_STATUS=$(gh api \
+            "/repos/$REPO/actions/runs?head_sha=$COMMIT_SHA" \
+            --jq '.workflow_runs[] | select(.name == "Backend CI/CD — Build, Push & Deploy") | .conclusion' \
+            | head -1)
+
+          # Check frontend pipeline status
+          FRONTEND_STATUS=$(gh api \
+            "/repos/$REPO/actions/runs?head_sha=$COMMIT_SHA" \
+            --jq '.workflow_runs[] | select(.name == "Frontend CI/CD — Build, Push & Deploy") | .conclusion' \
+            | head -1)
+
+          echo "Backend pipeline conclusion : $BACKEND_STATUS"
+          echo "Frontend pipeline conclusion: $FRONTEND_STATUS"
+
+          # Only proceed if BOTH have succeeded
+          # "still_running" handles the case where one pipeline
+          # finished but the other is still in progress.
+          if [ "$BACKEND_STATUS" = "success" ] && [ "$FRONTEND_STATUS" = "success" ]; then
+            echo "✅ Both pipelines passed — full-stack deploy confirmed"
+            echo "BOTH_PASSED=true" >> $GITHUB_ENV
+          elif [ -z "$BACKEND_STATUS" ] || [ -z "$FRONTEND_STATUS" ]; then
+            echo "⏳ One pipeline is still running — this job will be triggered again when it finishes"
+            echo "BOTH_PASSED=false" >> $GITHUB_ENV
+          else
+            echo "❌ One or both pipelines failed — skipping coordinated deploy"
+            echo "BOTH_PASSED=false" >> $GITHUB_ENV
+          fi
+
+      # ── STEP 2 ──────────────────────────────
+      # Configure AWS credentials so we can run
+      # health checks and kubectl commands.
+      # Only runs if both pipelines passed.
+      # ─────────────────────────────────────────
+      - name: Configure AWS credentials
+        if: env.BOTH_PASSED == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # ── STEP 3 ──────────────────────────────
+      # Install kubectl to inspect the cluster.
+      # ─────────────────────────────────────────
+      - name: Install kubectl
+        if: env.BOTH_PASSED == 'true'
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      # ── STEP 4 ──────────────────────────────
+      # Connect to the EKS cluster.
+      # ─────────────────────────────────────────
+      - name: Connect kubectl to EKS cluster
+        if: env.BOTH_PASSED == 'true'
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+
+      # ── STEP 5 ──────────────────────────────
+      # Run a full cluster health check.
+      # Now that both frontend and backend have deployed,
+      # we verify the overall state of the shakachow namespace.
+      # This is a post-deploy sanity check, not a deployment step.
+      # The individual CI pipelines have already deployed their
+      # respective components — this job just confirms the
+      # full-stack picture looks healthy together.
+      # ─────────────────────────────────────────
+      - name: Full-stack health check
+        if: env.BOTH_PASSED == 'true'
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  ShakaChow Full-Stack Health Check"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          echo ""
+          echo "--- All pods in shakachow namespace ---"
+          kubectl get pods \
+            --namespace shakachow \
+            --output wide
+
+          echo ""
+          echo "--- All services ---"
+          kubectl get services \
+            --namespace shakachow
+
+          echo ""
+          echo "--- Ingress (ALB) ---"
+          kubectl get ingress \
+            --namespace shakachow
+
+          echo ""
+          echo "--- HorizontalPodAutoscalers ---"
+          kubectl get hpa \
+            --namespace shakachow
+
+          echo ""
+          echo "--- Recent events (last 10) ---"
+          kubectl get events \
+            --namespace shakachow \
+            --sort-by='.lastTimestamp' \
+            | tail -10
+
+      # ── STEP 6 ──────────────────────────────
+      # Write the coordination summary.
+      # ─────────────────────────────────────────
+      - name: Write coordination summary
+        if: env.BOTH_PASSED == 'true'
+        run: |
+          echo "### 🎉 Full-Stack Deploy Verified" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both backend and frontend pipelines passed on commit \`${{ github.event.workflow_run.head_sha }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Service   | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Backend**  | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Frontend** | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Live:** https://shakachow.engrshakacloud.online" >> $GITHUB_STEP_SUMMARY

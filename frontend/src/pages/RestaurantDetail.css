@@ -1,0 +1,99 @@
+.rest-detail-header {
+  background: var(--navy);
+  padding: 1.5rem 0 2rem;
+}
+
+.back-link {
+  display: inline-block;
+  color: rgba(255,255,255,0.6);
+  font-size: 14px;
+  text-decoration: none;
+  margin-bottom: 1.25rem;
+  transition: color var(--transition);
+}
+.back-link:hover { color: var(--gold); }
+
+.rest-detail-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.5rem;
+}
+
+.rest-detail-emoji {
+  font-size: 72px;
+  line-height: 1;
+  background: var(--navy-mid);
+  border-radius: var(--radius);
+  width: 110px;
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.rest-detail-info h1 {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--white);
+  margin-bottom: 6px;
+}
+
+.rest-detail-desc {
+  color: rgba(255,255,255,0.65);
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+  max-width: 500px;
+}
+
+.rest-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.meta-item { font-size: 13px; color: rgba(255,255,255,0.7); }
+.meta-sep { color: rgba(255,255,255,0.3); }
+
+/* reuse Home grid + pills */
+.grid-4 {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.cat-pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cat-pill {
+  padding: 7px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1.5px solid var(--gray-200);
+  background: var(--white);
+  color: var(--gray-600);
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all var(--transition);
+}
+.cat-pill:hover { border-color: var(--gold); color: var(--gold); }
+.cat-pill-active { background: var(--navy); color: var(--gold); border-color: var(--navy); }
+
+.empty-state {
+  text-align: center;
+  color: var(--gray-400);
+  padding: 3rem 0;
+  font-size: 15px;
+}
+
+@media (max-width: 640px) {
+  .rest-detail-emoji { width: 72px; height: 72px; font-size: 44px; }
+  .rest-detail-info h1 { font-size: 22px; }
+}

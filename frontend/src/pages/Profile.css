@@ -1,0 +1,49 @@
+.profile-page { padding: 2rem 1.5rem 4rem; }
+.profile-title { font-size: 26px; font-weight: 700; margin-bottom: 1.5rem; }
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.profile-avatar-card {
+  padding: 2rem 1.5rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-avatar {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  background: var(--navy);
+  color: var(--gold);
+  font-size: 30px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.profile-name  { font-size: 17px; font-weight: 700; }
+.profile-email { font-size: 13px; color: var(--gray-400); }
+.profile-role  { margin-top: 2px; }
+
+.logout-btn { margin-top: 12px; width: 100%; justify-content: center; }
+
+.profile-form { padding: 1.75rem; }
+.profile-form h2 { font-size: 17px; font-weight: 700; margin-bottom: 1.25rem; }
+
+.form-field { margin-bottom: 14px; }
+.form-field label { display: block; font-size: 13px; font-weight: 500; color: var(--gray-600); margin-bottom: 5px; }
+
+.save-btn { margin-top: 8px; gap: 8px; }
+
+@media (max-width: 640px) {
+  .profile-grid { grid-template-columns: 1fr; }
+}

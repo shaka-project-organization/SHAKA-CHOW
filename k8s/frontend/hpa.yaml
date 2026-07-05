@@ -1,0 +1,57 @@
+# ============================================================
+# FILE: k8s/frontend/hpa.yaml
+# PURPOSE: Auto-scales frontend Nginx pods on CPU/memory load.
+# Nginx is stateless and scales horizontally with zero config —
+# any pod can serve any request.
+# ============================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+
+metadata:
+  name: shakachow-frontend-hpa
+  namespace: shakachow
+  labels:
+    app: shakachow-frontend
+
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: shakachow-frontend
+
+  minReplicas: 2
+  # Always keep 2 pods (one per AZ) for high availability.
+
+  maxReplicas: 6
+  # Nginx pods are tiny — 6 pods handles very high traffic.
+  # Each pod at 200m CPU limit = 1.2 total CPUs for the frontend.
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+          # Scale when Nginx average CPU hits 70%.
+          # High CPU on Nginx typically means very high concurrency
+          # (thousands of simultaneous connections).
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      # Scale up quickly — Nginx starts fast (< 1 second),
+      # so there is little risk in adding pods rapidly.
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      # Scale down slowly — 5 minute observation window
+      # before removing frontend pods.
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
