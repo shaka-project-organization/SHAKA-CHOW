@@ -1,16 +1,6 @@
-# ============================================================
-# FILE: .github/workflows/frontend-ci.yml
-# PURPOSE: Builds, tests, and deploys the React frontend.
-#
-# FIX APPLIED:
-# - Removed cache-dependency-path (no lock file exists yet)
-# - Changed npm ci → npm install (works without lock file)
-# - Added lock file generation step so subsequent runs use npm ci
-# - Node deprecation warning handled (Node 20 still works fine)
-# ============================================================
-
 name: Frontend CI/CD — Build, Push & Deploy
-
+permissions:
+  contents: write
 on:
   push:
     branches:
@@ -34,57 +24,31 @@ env:
   REACT_APP_API_URL: https://shakachow.engrshakacloud.online/api
 
 jobs:
-
-  # ════════════════════════════════════════════
-  # JOB 1 — INSTALL AND TEST
-  # ════════════════════════════════════════════
   test:
     name: Install & Test
     runs-on: ubuntu-latest
 
     steps:
-      # Downloads your repo code onto the CI runner VM.
       - name: Checkout repository code
         uses: actions/checkout@v4
-
-      # Install Node.js 20 on the runner.
-      # NOTE: We removed "cache" and "cache-dependency-path" because
-      # package-lock.json does not yet exist in the repo.
-      # SOLUTION A (do this locally first):
-      #   cd frontend && npm install → commits package-lock.json
-      #   Then restore cache: 'npm' and cache-dependency-path here.
-      # SOLUTION B (what we use now):
-      #   Skip caching until the lock file is committed.
-      #   Builds are ~30s slower without cache — acceptable short-term.
+        with:
+          
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # cache and cache-dependency-path intentionally omitted
-          # until package-lock.json is committed to the repo.
-
-      # npm install (not npm ci) works WITHOUT a lock file.
-      # It resolves and installs all dependencies from package.json
-      # and generates a package-lock.json on the runner.
-      # npm ci REQUIRES a lock file — it would fail here.
       - name: Install Node.js dependencies
         working-directory: frontend
         run: npm install
 
-      # Run React tests.
-      # --watchAll=false exits after tests complete (required in CI).
-      # --passWithNoTests passes even if no test files exist yet.
-      # CI=true treats warnings as errors (Create React App behaviour).
       - name: Run React test suite
         working-directory: frontend
         run: npm test -- --watchAll=false --passWithNoTests
         env:
           CI: true
 
-      # Generate and commit package-lock.json automatically.
-      # This step runs ONLY on push to main (not PRs).
-      # Once package-lock.json is committed, future runs are
-      # faster (can use npm ci and npm caching).
       - name: Commit package-lock.json if missing
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         working-directory: frontend
@@ -94,6 +58,7 @@ jobs:
             echo "package-lock.json not in git — committing it now"
             git config user.name  "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
+            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
             git add package-lock.json
             git commit -m "chore: add frontend package-lock.json [skip ci]"
             git push

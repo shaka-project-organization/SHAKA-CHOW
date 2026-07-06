@@ -1,13 +1,3 @@
-# ============================================================
-# FILE: .github/workflows/backend-ci.yml
-# PURPOSE: Builds, tests, and deploys the Node.js backend.
-#
-# FIX APPLIED:
-# - Removed cache-dependency-path (no lock file exists yet)
-# - Changed npm ci → npm install (works without lock file)
-# - Added auto-commit step to generate package-lock.json
-# ============================================================
-
 name: Backend CI/CD — Build, Push & Deploy
 
 on:
@@ -32,46 +22,24 @@ env:
   EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
 
 jobs:
-
-  # ════════════════════════════════════════════
-  # JOB 1 — INSTALL AND TEST
-  # ════════════════════════════════════════════
   test:
     name: Install & Test
     runs-on: ubuntu-latest
 
     steps:
-      # Download repo code onto the fresh CI runner VM.
       - name: Checkout repository code
         uses: actions/checkout@v4
-
-      # Install Node.js 20. No cache config yet because
-      # package-lock.json does not exist in the repo.
-      # Once you run "npm install" locally and commit
-      # package-lock.json, add back:
-      #   cache: 'npm'
-      #   cache-dependency-path: backend/package-lock.json
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # npm install resolves all deps from package.json and
-      # generates a fresh package-lock.json on the runner.
-      # npm ci would fail here because no lock file exists in the repo.
       - name: Install Node.js dependencies
         working-directory: backend
         run: npm install
-
-      # Run linter if an "npm run lint" script exists.
-      # --if-present skips silently if the script is not defined.
       - name: Run linter
         working-directory: backend
         run: npm run lint --if-present
 
-      # Run the test suite if one is configured.
-      # We inject safe dummy values for env vars the app needs at startup.
-      # Never use real production secrets in CI test runs.
       - name: Run test suite
         working-directory: backend
         run: npm test --if-present
@@ -91,8 +59,8 @@ jobs:
         run: |
           if ! git ls-files --error-unmatch package-lock.json 2>/dev/null; then
             echo "package-lock.json not tracked — committing now"
-            git config user.name  "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.name  "shaka"
+            git config user.email "shakajimoh23@gmail.com"
             git add package-lock.json
             git commit -m "chore: add backend package-lock.json [skip ci]"
             git push
@@ -101,13 +69,8 @@ jobs:
             echo "package-lock.json already tracked — skipping"
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
 
-  # ════════════════════════════════════════════
-  # JOB 2 — BUILD DOCKER IMAGE AND PUSH TO ECR
-  # Waits for Job 1 (test) to pass first.
-  # Only runs on pushes to main, not on PRs.
-  # ════════════════════════════════════════════
   build-and-push:
     name: Build Docker Image & Push to ECR
     runs-on: ubuntu-latest
@@ -137,20 +100,9 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Buildx enables GitHub Actions layer caching.
-      # First build: ~3–4 minutes. Subsequent builds with unchanged
-      # package.json: ~40 seconds (npm install layer reused from cache).
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build the backend Docker image using the multi-stage Dockerfile.
-      # Stage 1: installs only production dependencies (npm ci --only=production)
-      # Stage 2: copies node_modules + app code, runs as non-root user
-      # Result: a lean, secure production image (~180MB).
-      #
-      # Two tags are pushed:
-      #   :latest    → Kubernetes defaults to pulling this tag
-      #   :<git-sha> → permanent reference for rollbacks and auditing
       - name: Build and push backend Docker image
         id: build-push
         uses: docker/build-push-action@v5
@@ -164,17 +116,11 @@ jobs:
           cache-from: type=gha
           cache-to:   type=gha,mode=max
 
-      # Write the exact image URI to GITHUB_OUTPUT.
-      # The deploy job reads this as:
-      #   ${{ needs.build-and-push.outputs.image_uri }}
       - name: Export image URI as job output
         id: set-output
         run: |
           echo "image_uri=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
 
-      # Scan the image for CVEs using Trivy.
-      # Reports vulnerabilities but does not block the pipeline (exit-code: 0).
-      # Change to exit-code: 1 to enforce no HIGH/CRITICAL CVEs before deploy.
       - name: Scan image for vulnerabilities (Trivy)
         uses: aquasecurity/trivy-action@master
         with:
@@ -183,7 +129,6 @@ jobs:
           exit-code: '0'
           severity:  'HIGH,CRITICAL'
 
-      # Markdown summary shown in the GitHub Actions UI after the job.
       - name: Write build summary
         run: |
           echo "### ✅ Backend Image Pushed to ECR" >> $GITHUB_STEP_SUMMARY
@@ -194,11 +139,7 @@ jobs:
           echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
 
-  # ════════════════════════════════════════════
-  # JOB 3 — DEPLOY TO EKS
-  # Updates the backend pods in Kubernetes with
-  # the new image. Rolling update — zero downtime.
-  # ════════════════════════════════════════════
+
   deploy:
     name: Deploy Backend to EKS
     runs-on: ubuntu-latest
@@ -228,21 +169,12 @@ jobs:
         with:
           version: 'v1.29.0'
 
-      # Configure kubectl to target your EKS cluster.
-      # aws eks update-kubeconfig fetches:
-      #   - Cluster API server endpoint
-      #   - CA certificate for TLS verification
-      #   - Auth token generator (via aws eks get-token)
-      # All written to ~/.kube/config on the runner.
       - name: Connect kubectl to EKS cluster
         run: |
           aws eks update-kubeconfig \
             --region ${{ env.AWS_REGION }} \
             --name   ${{ env.EKS_CLUSTER_NAME }}
 
-      # Apply Kubernetes manifests.
-      # kubectl apply is declarative — creates what doesn't exist,
-      # updates what has changed. Safe to run multiple times.
       - name: Apply Kubernetes manifests
         run: |
           kubectl apply -f k8s/namespaces/namespaces.yaml
@@ -251,19 +183,13 @@ jobs:
           kubectl apply -f k8s/backend/service.yaml             --namespace shakachow
           kubectl apply -f k8s/backend/hpa.yaml                 --namespace shakachow
 
-      # Patch the deployment with the exact SHA-tagged image.
-      # This is what triggers the rolling update.
-      # Kubernetes starts new pods with the new image, waits for
-      # their readiness probes to pass, then removes old pods.
+  
       - name: Update backend deployment with new image
         run: |
           kubectl set image deployment/shakachow-backend \
             backend=${{ needs.build-and-push.outputs.image_uri }} \
             --namespace shakachow
 
-      # Block the pipeline until the rolling update is fully complete.
-      # If any new pod fails its readiness probe and never becomes healthy,
-      # this step fails after 5 minutes — triggering the rollback below.
       - name: Wait for rollout to complete
         run: |
           kubectl rollout status deployment/shakachow-backend \
@@ -281,9 +207,6 @@ jobs:
           echo "=== Deployment status ==="
           kubectl get deployment shakachow-backend --namespace shakachow
 
-      # Automatic rollback. Only runs when a previous step failed.
-      # kubectl rollout undo restores the previous ReplicaSet immediately.
-      # Users continue seeing the last working version of the app.
       - name: Rollback on failure
         if: failure()
         run: |
