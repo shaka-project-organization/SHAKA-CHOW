@@ -1,4 +1,6 @@
 name: Backend CI/CD — Build, Push & Deploy
+permissions:
+  contents: write
 
 on:
   push:
@@ -29,6 +31,10 @@ jobs:
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
+        with:
+          token:      ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -49,10 +55,6 @@ jobs:
           JWT_REFRESH_SECRET:  ci-only-not-real-refresh-secret
           MONGODB_URI:         mongodb://localhost:27017/shakachow_test
 
-      # Auto-commit package-lock.json to the repo so future CI runs
-      # can use "npm ci" (faster, reproducible) and npm layer caching.
-      # [skip ci] in the commit message prevents this push from
-      # triggering another CI run (avoids infinite loop).
       - name: Commit package-lock.json if missing
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         working-directory: backend
@@ -61,6 +63,7 @@ jobs:
             echo "package-lock.json not tracked — committing now"
             git config user.name  "shaka"
             git config user.email "shakajimoh23@gmail.com"
+            git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
             git add package-lock.json
             git commit -m "chore: add backend package-lock.json [skip ci]"
             git push
@@ -86,7 +89,6 @@ jobs:
         uses: actions/checkout@v4
 
       # Set AWS credentials from GitHub Secrets.
-      # Required for ECR login and EKS access.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -95,7 +97,7 @@ jobs:
           aws-region:            ${{ env.AWS_REGION }}
 
       # Get a temporary ECR authentication token and run docker login.
-      # Tokens expire after 12 hours — fine for a CI run.
+    
       - name: Log in to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
