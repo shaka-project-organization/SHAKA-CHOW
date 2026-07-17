@@ -122,6 +122,15 @@ jobs:
         id: set-output
         run: |
           echo "image_uri=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
+      
+          - name: Verify image URI output
+        run: |
+          IMAGE_URI=$(cat $GITHUB_OUTPUT | grep image_uri | cut -d= -f2)
+          echo "Image URI output: $IMAGE_URI"
+          if [ -z "$IMAGE_URI" ]; then
+            echo "❌ Error: image_uri output is empty"
+            exit 1
+          fi
 
       - name: Scan image for vulnerabilities (Trivy)
         uses: aquasecurity/trivy-action@master
@@ -185,11 +194,16 @@ jobs:
           kubectl apply -f k8s/backend/service.yaml             --namespace shakachow
           kubectl apply -f k8s/backend/hpa.yaml                 --namespace shakachow
 
-  
       - name: Update backend deployment with new image
         run: |
+          IMAGE_URI="${{ needs.build-and-push.outputs.image_uri }}"
+          if [ -z "$IMAGE_URI" ]; then
+            echo "❌ Error: image_uri output is empty"
+            exit 1
+          fi
+          echo "Deploying image: $IMAGE_URI"
           kubectl set image deployment/shakachow-backend \
-            backend=${{ needs.build-and-push.outputs.image_uri }} \
+            backend=$IMAGE_URI \
             --namespace shakachow
 
       - name: Wait for rollout to complete

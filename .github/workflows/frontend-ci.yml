@@ -192,8 +192,14 @@ jobs:
 
       - name: Update frontend deployment with new image
         run: |
+          IMAGE_URI="${{ needs.build-and-push.outputs.image_uri }}"
+          if [ -z "$IMAGE_URI" ]; then
+            echo "❌ ERROR: image_uri output is empty!"
+            exit 1
+          fi
+          echo "Updating deployment with image: $IMAGE_URI"
           kubectl set image deployment/shakachow-frontend \
-            frontend=${{ needs.build-and-push.outputs.image_uri }} \
+            frontend=$IMAGE_URI \
             --namespace shakachow
 
       - name: Wait for rollout to complete
@@ -202,9 +208,6 @@ jobs:
             --namespace shakachow \
             --timeout=300s
 
-      # Print pod status for confirmation. You will see:
-      # NAME                      READY  STATUS   RESTARTS  AGE
-      # shakachow-frontend-xxx    1/1    Running  0         45s
       - name: Verify deployment health
         run: |
           echo "=== Pod status ==="
