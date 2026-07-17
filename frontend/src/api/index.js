@@ -104,6 +104,3 @@ export const ordersApi = {
 };
 
 export default api;
-
-
-.
