@@ -1,54 +1,18 @@
-# ============================================================
-# FILE: k8s/namespaces/namespaces.yaml
-# PURPOSE: Creates the Kubernetes namespaces that logically
-# separate the application from monitoring infrastructure.
-#
-# WHY NAMESPACES MATTER:
-# Without namespaces, every resource (pods, services, secrets)
-# exists in the "default" namespace. This creates chaos at scale:
-#   - Secrets for the backend sit next to monitoring secrets
-#   - Resource quotas cannot be applied per component
-#   - RBAC policies cannot target specific components
-# With namespaces, you get clean isolation, scoped policies,
-# and the ability to delete an entire stack with one command.
-# ============================================================
-
-# ─────────────────────────────────────────────
-# apiVersion: which Kubernetes API group handles this resource.
-# "v1" is the core API group — covers Namespaces, Pods,
-# Services, ConfigMaps, Secrets, PersistentVolumes.
-# ─────────────────────────────────────────────
 apiVersion: v1
-
-# kind: the type of Kubernetes resource being declared.
 kind: Namespace
-
-# metadata: data ABOUT the resource (not the resource itself).
 metadata:
-  # name: the unique identifier for this namespace.
-  # All subsequent kubectl commands can target this namespace with:
-  # kubectl get pods --namespace shakachow
   name: shakachow
-
-  # labels: key-value pairs attached to the object.
-  # Used by selectors to find and group related resources.
   labels:
-    # app.kubernetes.io/* labels follow the Kubernetes recommended
-    # labelling conventions for interoperability with tools.
     app.kubernetes.io/managed-by: terraform
     environment: production
-
+    
 ---
-# The "---" separator allows multiple Kubernetes resources
-# to be defined in a single YAML file.
-# kubectl apply -f namespaces.yaml creates BOTH namespaces.
 
 apiVersion: v1
 kind: Namespace
 metadata:
   name: monitoring
-  # All Prometheus, Grafana, and Alertmanager resources
-  # go into this namespace, separate from the app.
+
   labels:
     app.kubernetes.io/managed-by: terraform
     environment: production

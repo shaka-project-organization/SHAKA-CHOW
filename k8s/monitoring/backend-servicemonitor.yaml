@@ -1,54 +1,23 @@
-# ============================================================
-# FILE: k8s/monitoring/backend-servicemonitor.yaml
-# PURPOSE: Tells Prometheus exactly how to scrape metrics
-# from the backend pods.
-#
-# WITHOUT THIS FILE:
-# Prometheus scrapes standard Kubernetes metrics (CPU, memory,
-# network) via kube-state-metrics and node-exporter, but it
-# does NOT scrape your application's /api/health endpoint.
-#
-# WITH THIS FILE:
-# Prometheus discovers all pods with label "app: shakachow-backend"
-# and scrapes /api/health every 15 seconds. You can add a
-# /metrics endpoint (using prom-client npm package) to expose
-# custom business metrics: active users, orders per minute,
-# API response times — then graph them in Grafana.
-#
-# ServiceMonitor is a CUSTOM RESOURCE DEFINITION (CRD) installed
-# by kube-prometheus-stack. It is not a built-in Kubernetes type.
-# ============================================================
 
-# monitoring.coreos.com is the API group for Prometheus Operator CRDs.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor   # Custom resource type from Prometheus Operator
 
 metadata:
   name: shakachow-backend-monitor
   namespace: monitoring
-  # ServiceMonitors live in the monitoring namespace even though
-  # they scrape targets in the shakachow namespace.
-  # The Prometheus Operator watches all namespaces for ServiceMonitors.
-
+ 
   labels:
     app: shakachow-backend
     release: kube-prometheus-stack
-    # This label MUST match the Prometheus Operator's
-    # serviceMonitorSelector configuration. The kube-prometheus-stack
-    # Helm chart uses "release: kube-prometheus-stack" as the selector.
-    # Without this label, Prometheus ignores this ServiceMonitor.
+  
 
 spec:
-
-  # namespaceSelector: which namespaces to look for the target Service.
-  # Our backend Service is in the "shakachow" namespace.
   namespaceSelector:
     matchNames:
       - shakachow
       # Only look for matching services in this namespace.
 
   # selector: which Services to scrape. Prometheus finds the Service
-  # and discovers pod IPs from its Endpoints object.
   selector:
     matchLabels:
       app: shakachow-backend
@@ -59,16 +28,9 @@ spec:
     - port: http
       # "http" is the port name defined in the Service:
       # ports.name: http → port 80 → targetPort 5000
-      # Prometheus connects to each pod on port 5000.
 
       path: /api/health
-      # The URL path to scrape for metrics.
-      # Currently returns health status JSON.
-      # Add a /metrics path using the "prom-client" npm package
-      # to expose proper Prometheus-format metrics:
-      #   npm install prom-client
-      # Then Prometheus can scrape request rates, latencies, etc.
-
+     
       interval: 15s
       # Scrape every 15 seconds. Matches Prometheus global scrapeInterval.
 

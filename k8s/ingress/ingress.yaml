@@ -1,25 +1,4 @@
-# ============================================================
-# FILE: k8s/ingress/ingress.yaml
-# PURPOSE: Defines how external HTTPS traffic enters the cluster
-# and routes to the correct backend service.
-#
-# HOW THIS WORKS:
-# 1. You apply this file → the AWS Load Balancer Controller
-#    (installed by Terraform/Helm) reads it.
-# 2. The controller creates a real AWS Application Load Balancer
-#    in your public subnets.
-# 3. The ALB has:
-#    - Port 80 listener → redirects all traffic to HTTPS
-#    - Port 443 listener → routes based on path:
-#        /api/*  → shakachow-backend-svc:80   (Node.js Express)
-#        /*      → shakachow-frontend-svc:80  (Nginx/React)
-# 4. The ACM certificate is attached to the 443 listener.
-# 5. The ALB registers EKS pod IPs directly as targets
-#    (target-type: ip) for efficient, low-latency routing.
-# ============================================================
 
-# networking.k8s.io/v1 is the stable Ingress API (K8s 1.19+).
-# Never use extensions/v1beta1 — it was removed in K8s 1.22.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 
@@ -30,152 +9,82 @@ metadata:
     app: shakachow
     environment: production
 
-  # Annotations: key-value metadata read by the ALB Controller.
-  # These are the primary way to configure ALB behaviour.
-  # Every annotation starting with "alb.ingress.kubernetes.io/"
-  # is an instruction to the AWS Load Balancer Controller.
+
   annotations:
 
-    # ── CORE ALB ANNOTATIONS ──────────────────────────────────
-
     kubernetes.io/ingress.class: "alb"
-    # Tells Kubernetes which Ingress controller handles this resource.
-    # "alb" = the AWS Load Balancer Controller installed by Helm.
-    # Without this, no controller picks it up and no ALB is created.
+
 
     alb.ingress.kubernetes.io/scheme: "internet-facing"
-    # Create a public ALB reachable from the internet.
-    # Alternative: "internal" for a private ALB inside the VPC.
-    # internet-facing means the ALB gets a public IP and DNS name.
+
 
     alb.ingress.kubernetes.io/target-type: "ip"
-    # Route traffic directly to pod IPs instead of node IPs.
-    # With "ip" targeting:
-    #   ALB → Pod IP (direct, one hop)
-    # With "instance" targeting (the alternative):
-    #   ALB → Node IP → iptables → Pod IP (two hops, adds latency)
-    # "ip" requires the vpc-cni plugin (installed as EKS addon)
-    # which assigns real VPC IPs to pods.
+
 
     alb.ingress.kubernetes.io/load-balancer-name: "shakachow-alb"
-    # The name of the ALB created in AWS. Visible in the EC2 console
-    # under Load Balancers. Useful for debugging and cost tracking.
 
-    # ── SUBNET PLACEMENT ──────────────────────────────────────
+    alb.ingress.kubernetes.io/subnets: "subnet-0d731bc2618602955, subnet-011496a893c93fd0e"
 
-    # ALB must be placed in the PUBLIC subnets (not private).
-    # Replace these IDs with your actual public subnet IDs
-    # from: terraform output public_subnet_ids
-    alb.ingress.kubernetes.io/subnets: "subnet-REPLACE_PUBLIC_1, subnet-REPLACE_PUBLIC_2"
 
-    # ── SSL / HTTPS ────────────────────────────────────────────
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:467508858835:certificate/eb45cea3-9b4b-4ace-a54f-24f86ada1a4b"
 
-    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_WITH_CERTIFICATE_ARN"
-    # ARN of the ACM certificate for *.engrshakacloud.online.
-    # Get this from: terraform output certificate_arn
-    # The ALB attaches this cert to its HTTPS listener.
-    # All TLS termination happens at the ALB — pods receive plain HTTP.
 
     alb.ingress.kubernetes.io/ssl-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
-    # TLS security policy. This policy:
-    #   - Supports TLS 1.2 and 1.3 (modern, secure)
-    #   - Disables TLS 1.0 and 1.1 (deprecated, insecure)
-    #   - Supports strong cipher suites only
-    # Required for PCI-DSS and SOC2 compliance.
+
 
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-    # Create two listeners on the ALB:
-    #   Port 80  → HTTP  (will be redirected to 443)
-    #   Port 443 → HTTPS (the real traffic, with TLS termination)
+
 
     alb.ingress.kubernetes.io/ssl-redirect: "443"
-    # Any HTTP request to port 80 is automatically redirected
-    # to HTTPS port 443 with a 301 permanent redirect.
-    # Users who type http://shakachow.engrshakacloud.online
-    # are transparently sent to the HTTPS version.
 
-    # ── HEALTH CHECKS ─────────────────────────────────────────
 
     alb.ingress.kubernetes.io/healthcheck-protocol: "HTTP"
-    # ALB pings each pod using HTTP (not HTTPS — traffic
-    # is already inside the VPC at this point, no TLS needed).
+  
 
     alb.ingress.kubernetes.io/healthcheck-path: "/api/health"
-    # The path the ALB GETs to check if the backend is healthy.
-    # Returns 200 {"success": true, "message": "ShakaChow API is live"}
+
 
     alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
-    # Check each pod every 15 seconds.
+
 
     alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
-    # If the pod doesn't respond within 5 seconds, count it as failed.
+
 
     alb.ingress.kubernetes.io/healthy-threshold-count: "2"
-    # A pod must pass 2 consecutive health checks to be marked healthy
-    # and receive traffic. Prevents a briefly-healthy pod from
-    # receiving traffic before it is fully ready.
+
 
     alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
-    # A pod must fail 3 consecutive checks before being removed
-    # from the target group. Prevents removing a pod due to
-    # a single transient failure (network blip, GC pause).
 
-    # ── TAGS ──────────────────────────────────────────────────
 
     alb.ingress.kubernetes.io/tags: "Project=shakachow,Environment=production,ManagedBy=kubernetes"
-    # Tags applied to the AWS ALB resource for cost tracking
-    # and resource identification in the AWS console.
 
-    # ── PERFORMANCE ───────────────────────────────────────────
 
     alb.ingress.kubernetes.io/target-group-attributes: "deregistration_delay.timeout_seconds=30"
-    # When a pod is removed from the target group (e.g. during
-    # a rolling deployment), the ALB waits 30 seconds before
-    # completely stopping traffic to it. This gives in-flight
-    # requests time to complete. Default is 300 seconds — too
-    # long for fast deployments. 30 seconds matches our
-    # terminationGracePeriodSeconds.
 
 spec:
 
   ingressClassName: alb
-  # Modern way to specify the Ingress controller (K8s 1.18+).
-  # Works alongside the annotation above — both are needed
-  # for full compatibility with all ALB controller versions.
 
-  # rules: path-based routing rules.
-  # The ALB evaluates these in order and routes traffic
-  # to the matching backend service.
   rules:
     - host: shakachow.engrshakacloud.online
-      # Only handle requests to this exact hostname.
-      # Requests to other hostnames are returned a 404 by the ALB.
+
       http:
         paths:
-
-          # ── BACKEND ROUTE ───────────────────────────────────
           - path: /api
             pathType: Prefix
-            # Prefix: matches /api, /api/, /api/health, /api/auth/login, etc.
-            # Any path starting with /api goes to the backend.
             backend:
               service:
                 name: shakachow-backend-svc
-                # Routes to the backend ClusterIP Service.
+
                 port:
                   number: 80
-                  # The Service's port 80 → container port 5000.
 
-          # ── FRONTEND ROUTE ──────────────────────────────────
           - path: /
             pathType: Prefix
-            # Prefix "/" matches EVERYTHING not matched above.
-            # Since /api is listed first and ALB evaluates
-            # most-specific matches first, / only catches
-            # non-API traffic: /, /restaurant/123, /cart, etc.
+
             backend:
               service:
                 name: shakachow-frontend-svc
-                # Routes to the Nginx/React Service.
+
                 port:
                   number: 80

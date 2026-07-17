@@ -1,107 +1,53 @@
-# ============================================================
-# FILE: k8s/backend/deployment.yaml
-# PURPOSE: Defines how the backend Node.js/Express application
-# runs inside the Kubernetes cluster.
-#
-# A Deployment manages a set of identical Pods (replicas).
-# It ensures:
-#   - The desired number of pods is always running
-#   - Pods are replaced when they crash or become unhealthy
-#   - Rolling updates with zero downtime when you deploy new images
-#   - Rollback to a previous version if a deployment fails
-# ============================================================
 
-# apps/v1 is the API group for workload resources:
-# Deployment, StatefulSet, DaemonSet, ReplicaSet.
 apiVersion: apps/v1
-kind: Deployment   # Manages stateless application pods
+kind: Deployment   
 
 metadata:
   name: shakachow-backend
-  # Name used to reference this deployment:
-  # kubectl get deployment shakachow-backend -n shakachow
-  # kubectl set image deployment/shakachow-backend backend=<new-image>
 
   namespace: shakachow
-  # Scopes this resource to the shakachow namespace.
 
   labels:
     app: shakachow-backend
     tier: backend
     environment: production
 
-# spec: the desired state — what you WANT Kubernetes to maintain.
 spec:
 
   replicas: 2
-  # Run 2 identical backend pods at all times.
-  # With 2 AZs and 2 nodes (one per AZ), Kubernetes spreads
-  # these pods so one runs in each AZ — if us-east-1a fails,
-  # the pod in us-east-1b keeps serving traffic.
-  # HPA (hpa.yaml) can scale this up/down based on CPU.
 
-  # selector: how the Deployment finds its pods.
-  # Pods whose labels match this selector are managed
-  # by this Deployment. Must match spec.template.metadata.labels.
   selector:
     matchLabels:
       app: shakachow-backend
-      # Only pods with label "app: shakachow-backend" are
-      # owned by this Deployment. Prevents the Deployment from
-      # accidentally managing pods from other components.
 
-  # strategy: how rolling updates are performed.
   strategy:
     type: RollingUpdate
-    # RollingUpdate = replace pods gradually, not all at once.
-    # Alternative: Recreate (deletes all old pods first —
-    # causes downtime, not suitable for production).
+
     rollingUpdate:
       maxUnavailable: 0
-      # Never take a pod down until a new one is ready.
-      # At all times during the update, at least 2 pods serve traffic.
-      # This guarantees zero downtime deployments.
       maxSurge: 1
-      # Allow 1 extra pod to exist during the update.
-      # With 2 replicas and maxSurge=1, up to 3 pods can run
-      # simultaneously during an update (2 old + 1 new).
 
-  # template: the pod blueprint — all pods created by this
-  # Deployment are identical copies of this template.
   template:
     metadata:
       labels:
         app: shakachow-backend
         tier: backend
-        # Must match selector.matchLabels above.
+       
         version: "1.0"
       annotations:
-        # Prometheus annotation — tells Prometheus to scrape this pod.
-        # The ServiceMonitor in monitoring/ also handles this,
-        # but annotations are a fallback for annotation-based discovery.
         prometheus.io/scrape: "true"
         prometheus.io/port: "5000"
         prometheus.io/path: "/api/health"
 
     spec:
       # How long Kubernetes waits for a pod to terminate gracefully
-      # before force-killing it. 30 seconds lets Express finish
-      # in-flight requests before shutting down.
       terminationGracePeriodSeconds: 30
-
-      # Spread pods across availability zones.
-      # Prevents both backend pods from running in the same AZ.
-      # If that AZ goes down, both pods would fail simultaneously.
       topologySpreadConstraints:
         - maxSkew: 1
           # maxSkew=1: the difference in pod count between any
-          # two AZs cannot exceed 1. With 2 pods across 2 AZs,
-          # this enforces exactly 1 pod per AZ.
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: DoNotSchedule
-          # If the constraint cannot be satisfied (e.g. only 1
-          # node available), do not schedule the pod rather than
-          # violating the constraint.
+
           labelSelector:
             matchLabels:
               app: shakachow-backend
@@ -109,75 +55,35 @@ spec:
       containers:
         - name: backend
           # Container name used in: kubectl logs <pod> -c backend
-          # and in: kubectl set image deployment/shakachow-backend backend=<new-image>
 
-          image: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/shakachow-backend:latest
-          # CI/CD replaces this with the exact SHA-tagged image:
-          # kubectl set image deployment/shakachow-backend \
-          #   backend=ACCOUNT.dkr.ecr.REGION.amazonaws.com/shakachow-backend:abc1234
-
+          image: 467508858835.dkr.ecr.us-east-1.amazonaws.com/shakachow-backend:latest
           imagePullPolicy: Always
-          # Always pull the latest version of the image tag from ECR.
-          # Prevents Kubernetes from using a cached old version of :latest.
-          # With SHA-tagged images, IfNotPresent would also work
-          # since the SHA tag never changes.
 
           ports:
             - name: http
-              containerPort: 5000
-              # The port the Express app listens on.
-              # This matches PORT in the ConfigMap.
-              # Naming the port ("http") allows the Service to
-              # reference it by name instead of number.
+              containerPort: 5000.
               protocol: TCP
 
-          # envFrom: injects ALL keys from a ConfigMap or Secret
-          # as environment variables. Cleaner than listing each
-          # variable individually.
           envFrom:
             - configMapRef:
                 name: backend-config
-                # Injects: NODE_ENV, PORT, JWT_EXPIRES_IN,
-                # JWT_REFRESH_EXPIRES_IN, CLIENT_URL
+
             - secretRef:
                 name: backend-secret
-                # Injects: MONGODB_URI, JWT_SECRET, JWT_REFRESH_SECRET
-                # These appear as normal env vars inside the container
-                # but are stored encrypted in the Secret object.
-
-          # resources: CPU and memory limits and requests.
-          # requests: minimum guaranteed allocation.
-          #   Kubernetes uses this for scheduling — a pod is only
-          #   placed on a node that has at least this much free.
-          # limits: maximum allowed allocation.
-          #   If the container exceeds memory limits, it is killed
-          #   and restarted (OOMKilled). If it exceeds CPU limits,
-          #   it is throttled (not killed).
-          resources:
+                          resources:
             requests:
               memory: "128Mi"
-              # 128MB minimum RAM. Node.js base: ~50MB.
-              # With Express, Mongoose, and request handling: ~100-128MB.
+
               cpu: "100m"
-              # 100 millicores = 0.1 CPU core. Express is lightweight
-              # at idle. The HPA will request more pods before a single
-              # pod hits CPU limits.
             limits:
               memory: "256Mi"
-              # 256MB max. If the app leaks memory and hits this,
-              # the pod restarts automatically — acting as a circuit breaker.
-              cpu: "500m"
-              # 500 millicores = 0.5 CPU core maximum per pod.
 
-          # livenessProbe: Kubernetes checks this periodically.
-          # If it FAILS, the pod is considered dead and restarted.
-          # Use for: detecting deadlocks, infinite loops, frozen apps.
-          # Do NOT use for: startup failures (use startupProbe),
-          # dependency failures (use readinessProbe instead).
+              cpu: "500m"
+
           livenessProbe:
             httpGet:
               path: /api/health
-              # GET /api/health returns 200 {"success": true} when healthy.
+
               port: 5000
             initialDelaySeconds: 15
             # Wait 15 seconds after container start before first check.
@@ -189,11 +95,7 @@ spec:
             # 3 * 20s = 60 seconds of failures before restart.
 
           # readinessProbe: Kubernetes checks this to decide whether
-          # to send traffic to this pod.
-          # If it FAILS, the pod is removed from Service endpoints —
-          # traffic stops going to it, but it is NOT restarted.
-          # Use for: detecting when the app is temporarily overloaded,
-          # during startup while connecting to MongoDB, etc.
+ c.
           readinessProbe:
             httpGet:
               path: /api/health
@@ -206,26 +108,16 @@ spec:
             # After 3 failures, stop sending traffic to this pod.
             successThreshold: 1
             # One successful check re-adds the pod to traffic rotation.
-
-          # startupProbe: allows slow-starting containers extra time.
-          # Only checked during startup — once it passes, liveness
-          # and readiness probes take over.
+r.
           startupProbe:
             httpGet:
               path: /api/health
               port: 5000
             failureThreshold: 30
             periodSeconds: 5
-            # 30 * 5 = 150 seconds (2.5 minutes) for the app to start.
-            # Useful if MongoDB connection is slow on cold start.
 
-          # lifecycle hooks: commands run at container lifecycle events.
           lifecycle:
             preStop:
               exec:
                 command: ["/bin/sh", "-c", "sleep 5"]
-                # Wait 5 seconds before the container stops.
-                # This gives kube-proxy time to update iptables rules
-                # and stop routing new requests to this pod before
-                # Express starts shutting down. Prevents 502 errors
-                # during rolling deployments.
+
