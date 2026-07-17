@@ -1,39 +1,6 @@
-# ============================================================
-# FILE: .github/workflows/deploy.yml
-# PURPOSE: This is an OPTIONAL coordination workflow.
-#          It only fires when BOTH the backend AND frontend
-#          CI pipelines have passed on the same commit.
-#
-# USE CASE: When you push a change that touches both
-#           frontend/ and backend/ in the same commit,
-#           you want to guarantee both images are built and
-#           pushed BEFORE either deploys to EKS.
-#           This prevents a scenario where the frontend
-#           deploys with a new API contract before the
-#           backend that implements it is live.
-#
-# HOW IT WORKS:
-#   backend-ci.yml  ──┐
-#                     ├──► deploy.yml (runs only when both succeed)
-#   frontend-ci.yml ──┘
-#
-# NOTE: For commits that only change backend/ or only change
-#       frontend/, this workflow does not trigger.
-#       The individual CI pipelines handle deployment themselves.
-#       This workflow is only relevant for full-stack changes.
-# ============================================================
 
 name: Full-Stack Deploy — Coordinate Frontend + Backend
 
-# ─────────────────────────────────────────────
-# TRIGGER: workflow_run
-# This event fires when another workflow finishes.
-# "workflows" lists the workflow names to watch.
-# "types: [completed]" = fire when they finish
-#   (regardless of success or failure — we check
-#    the result in the job condition below).
-# "branches: [main]" = only watch runs on main.
-# ─────────────────────────────────────────────
 on:
   workflow_run:
     workflows:
@@ -50,34 +17,14 @@ env:
 
 jobs:
 
-  # ════════════════════════════════════════════
-  # JOB: coordinate-deploy
-  # Checks if the triggering workflow succeeded,
-  # then confirms the sibling workflow also passed
-  # on the same commit before doing any work.
-  # ════════════════════════════════════════════
   coordinate-deploy:
     name: Verify Both Pipelines Passed
     runs-on: ubuntu-latest
 
-    # "github.event.workflow_run.conclusion == 'success'"
-    # The workflow_run event fires even on failure.
-    # This condition ensures we only proceed when
-    # the triggering workflow actually succeeded.
     if: github.event.workflow_run.conclusion == 'success'
 
     steps:
-      # ── STEP 1 ──────────────────────────────
-      # Use the GitHub API to check the status of ALL
-      # workflow runs on the same commit SHA.
-      # "github.event.workflow_run.head_sha" is the
-      # commit SHA that triggered the completed workflow.
-      # We query the GitHub API for workflow runs on
-      # that exact SHA to verify both pipelines passed.
-      # "gh" is the GitHub CLI — pre-installed on all runners.
-      # "GH_TOKEN" is automatically available in every run —
-      # you don't need to add it as a secret.
-      # ─────────────────────────────────────────
+      
       - name: Check both CI pipelines passed on this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -124,11 +71,6 @@ jobs:
             echo "BOTH_PASSED=false" >> $GITHUB_ENV
           fi
 
-      # ── STEP 2 ──────────────────────────────
-      # Configure AWS credentials so we can run
-      # health checks and kubectl commands.
-      # Only runs if both pipelines passed.
-      # ─────────────────────────────────────────
       - name: Configure AWS credentials
         if: env.BOTH_PASSED == 'true'
         uses: aws-actions/configure-aws-credentials@v4
@@ -137,9 +79,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
 
-      # ── STEP 3 ──────────────────────────────
-      # Install kubectl to inspect the cluster.
-      # ─────────────────────────────────────────
       - name: Install kubectl
         if: env.BOTH_PASSED == 'true'
         uses: azure/setup-kubectl@v3
@@ -158,13 +97,7 @@ jobs:
 
       # ── STEP 5 ──────────────────────────────
       # Run a full cluster health check.
-      # Now that both frontend and backend have deployed,
-      # we verify the overall state of the shakachow namespace.
-      # This is a post-deploy sanity check, not a deployment step.
-      # The individual CI pipelines have already deployed their
-      # respective components — this job just confirms the
-      # full-stack picture looks healthy together.
-      # ─────────────────────────────────────────
+
       - name: Full-stack health check
         if: env.BOTH_PASSED == 'true'
         run: |

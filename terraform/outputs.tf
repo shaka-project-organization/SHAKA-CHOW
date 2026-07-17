@@ -1,15 +1,4 @@
-# ============================================================
-# FILE: terraform/outputs.tf
-# PURPOSE: Values Terraform prints after "terraform apply"
-# completes. These are the values you need to configure
-# kubectl, update GitHub Secrets, and wire up your DNS.
-# Access any output with: terraform output <name>
-# Access sensitive outputs with: terraform output -raw <name>
-# ============================================================
 
-# ─────────────────────────────────────────────
-# NETWORKING OUTPUTS
-# ─────────────────────────────────────────────
 
 output "vpc_id" {
   description = "ID of the VPC. Used to verify resource placement in the AWS console and referenced in future Terraform modules."
@@ -59,12 +48,12 @@ output "configure_kubectl_command" {
 
 output "ecr_frontend_repository_url" {
   description = "Full ECR URL for the frontend image. Use this in your Dockerfile tag and CI/CD pipeline. Format: <account>.dkr.ecr.<region>.amazonaws.com/shakachow-frontend"
-  value       = module.ecr.frontend_repository_url
+  value       = data.aws_ecr_repository.frontend.arn
 }
 
 output "ecr_backend_repository_url" {
   description = "Full ECR URL for the backend image."
-  value       = module.ecr.backend_repository_url
+  value       = data.aws_ecr_repository.backend.arn
 }
 
 output "ecr_login_command" {
@@ -97,7 +86,7 @@ output "grafana_url" {
 
 output "deployment_summary" {
   description = "Quick reference summary of all key values after a successful apply."
-  value = <<-EOT
+  value       = <<-EOT
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     🍛 ShakaChow Infrastructure — Deployment Complete

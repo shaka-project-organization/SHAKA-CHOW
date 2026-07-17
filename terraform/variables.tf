@@ -1,15 +1,4 @@
-# ============================================================
-# FILE: terraform/variables.tf
-# PURPOSE: Declares every input variable this Terraform project
-# accepts. Variables make the code reusable — you can deploy
-# a staging environment and a production environment from the
-# same code by passing different variable values.
-# Values are set in terraform.tfvars (not committed to git).
-# ============================================================
 
-# ─────────────────────────────────────────────
-# GLOBAL
-# ─────────────────────────────────────────────
 
 variable "aws_region" {
   description = "AWS region where all resources are deployed. Must match the region your Route 53 hosted zone and ACM certificate are in."
@@ -40,8 +29,8 @@ variable "vpc_cidr" {
     Do not overlap this with any other VPC you
     might want to peer with in the future.
   EOT
-  type    = string
-  default = "10.0.0.0/16"
+  type        = string
+  default     = "10.0.0.0/16"
 }
 
 variable "availability_zones" {
@@ -84,7 +73,7 @@ variable "cluster_name" {
 variable "cluster_version" {
   description = "Kubernetes version for the EKS control plane. AWS supports the last 3 minor versions. Check https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html for supported versions."
   type        = string
-  default     = "1.29"
+  default     = "1.32"
 }
 
 variable "node_instance_type" {

@@ -1,8 +1,4 @@
-# ============================================================
-# FILE: terraform/modules/vpc/outputs.tf
-# PURPOSE: Exposes the VPC module's key resource IDs so the
-# root main.tf and other modules can reference them.
-# ============================================================
+
 
 output "vpc_id" {
   description = "ID of the created VPC. Referenced by security groups and EKS."
@@ -12,9 +8,6 @@ output "vpc_id" {
 output "public_subnet_ids" {
   description = "List of public subnet IDs (one per AZ). Used by the ALB."
   value       = aws_subnet.public[*].id
-  # [*] is the splat operator — extracts the "id" attribute
-  # from every element in the aws_subnet.public list.
-  # Returns: ["subnet-abc123", "subnet-def456"]
 }
 
 output "private_subnet_ids" {
