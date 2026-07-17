@@ -61,7 +61,7 @@ spec:
 
           ports:
             - name: http
-              containerPort: 5000.
+              containerPort: 5000
               protocol: TCP
 
           envFrom:
@@ -70,7 +70,7 @@ spec:
 
             - secretRef:
                 name: backend-secret
-                          resources:
+          resources:
             requests:
               memory: "128Mi"
 
@@ -95,7 +95,7 @@ spec:
             # 3 * 20s = 60 seconds of failures before restart.
 
           # readinessProbe: Kubernetes checks this to decide whether
- c.
+ 
           readinessProbe:
             httpGet:
               path: /api/health
@@ -108,7 +108,7 @@ spec:
             # After 3 failures, stop sending traffic to this pod.
             successThreshold: 1
             # One successful check re-adds the pod to traffic rotation.
-r.
+
           startupProbe:
             httpGet:
               path: /api/health
