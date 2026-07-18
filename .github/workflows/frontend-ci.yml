@@ -120,9 +120,11 @@ jobs:
  
       - name: Export image URI as job output
         id: set-output
+        if: always()
         run: |
-          echo "image_uri=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
-
+          IMAGE_URI="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
+          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Exported image_uri='$IMAGE_URI'"
       # Scan the pushed image for known CVEs using Trivy.
 
       - name: Scan image for vulnerabilities (Trivy)
