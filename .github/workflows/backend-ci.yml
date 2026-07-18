@@ -1,7 +1,11 @@
+
+
+
 name: Backend CI/CD — Build, Push & Deploy
+ 
 permissions:
   contents: write
-
+ 
 on:
   push:
     branches:
@@ -15,98 +19,108 @@ on:
     paths:
       - 'backend/**'
       - '.github/workflows/backend-ci.yml'
-
+ 
 env:
   AWS_REGION:       ${{ secrets.AWS_REGION }}
   AWS_ACCOUNT_ID:   ${{ secrets.AWS_ACCOUNT_ID }}
   ECR_REPO:         shakachow-backend
   IMAGE_TAG:        ${{ github.sha }}
   EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-
+ 
 jobs:
+ 
+  # ════════════════════════════════════════════
+  # JOB 1 — INSTALL AND TEST
+  # ════════════════════════════════════════════
   test:
     name: Install & Test
     runs-on: ubuntu-latest
-
+ 
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
         with:
-          token:      ${{ secrets.GITHUB_TOKEN }}
+          token:       ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-
+ 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install Node.js dependencies
+ 
+      - name: Install dependencies
         working-directory: backend
         run: npm install
+ 
       - name: Run linter
         working-directory: backend
         run: npm run lint --if-present
-
-      - name: Run test suite
+ 
+      - name: Run tests
         working-directory: backend
         run: npm test --if-present
         env:
-          NODE_ENV:            test
-          JWT_SECRET:          ci-only-not-real-jwt-secret
-          JWT_REFRESH_SECRET:  ci-only-not-real-refresh-secret
-          MONGODB_URI:         mongodb://localhost:27017/shakachow_test
-
+          NODE_ENV:           test
+          JWT_SECRET:         ci-only-not-real
+          JWT_REFRESH_SECRET: ci-only-not-real-refresh
+          MONGODB_URI:        mongodb://localhost:27017/shakachow_test
+ 
       - name: Commit package-lock.json if missing
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         working-directory: backend
         run: |
-          if ! git ls-files --error-unmatch package-lock.json 2>/dev/null; then
-            echo "package-lock.json not tracked — committing now"
-            git config user.name  "shaka"
-            git config user.email "shakajimoh23@gmail.com"
+          if git ls-files --error-unmatch package-lock.json 2>/dev/null; then
+            echo "✅ package-lock.json already tracked"
+          else
+            echo "📦 Committing package-lock.json..."
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
             git add package-lock.json
             git commit -m "chore: add backend package-lock.json [skip ci]"
-            git push
-            echo "✅ package-lock.json committed"
-          else
-            echo "package-lock.json already tracked — skipping"
+            git push origin HEAD:${{ github.ref_name }}
           fi
         env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN }}
-
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ 
+  # ════════════════════════════════════════════
+  # JOB 2 — BUILD AND PUSH TO ECR
+  # No outputs — deploy job reconstructs URI itself
+  # ════════════════════════════════════════════
   build-and-push:
     name: Build Docker Image & Push to ECR
     runs-on: ubuntu-latest
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    outputs:
-      image_uri: ${{ steps.set-output.outputs.image_uri }}
-
+ 
+    # NO "outputs" block here at all.
+    # The deploy job will reconstruct the image URI from
+    # env vars that are always available and never empty.
+ 
     steps:
-      # Fresh runner for this job — must checkout again.
       - name: Checkout repository code
         uses: actions/checkout@v4
-
-      # Set AWS credentials from GitHub Secrets.
+ 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
-
-      # Get a temporary ECR authentication token and run docker login.
-    
+ 
       - name: Log in to Amazon ECR
-        id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
-
+ 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
+ 
+      # Build and push the backend image.
+      # Tags pushed:
+      #   :latest        → always points to most recent main build
+      #   :<github.sha>  → permanent reference for this exact commit
+      # The deploy job uses :<github.sha> to deploy the exact
+      # image built in THIS run — not a stale :latest from before.
       - name: Build and push backend Docker image
-        id: build-push
         uses: docker/build-push-action@v5
         with:
           context: ./backend
@@ -117,21 +131,24 @@ jobs:
             ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}
           cache-from: type=gha
           cache-to:   type=gha,mode=max
-
-      - name: Export image URI as job output
-        id: set-output
+ 
+      # Confirm the image actually exists in ECR before deploy runs.
+      # This is the single source of truth — if this passes,
+      # the image is in ECR and the deploy job can pull it.
+      - name: Confirm image exists in ECR
         run: |
-          echo "image_uri=${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
-      
-      - name: Verify image URI output
-        run: |
-          IMAGE_URI=$(cat $GITHUB_OUTPUT | grep image_uri | cut -d= -f2)
-          echo "Image URI output: $IMAGE_URI"
-          if [ -z "$IMAGE_URI" ]; then
-            echo "❌ Error: image_uri output is empty"
-            exit 1
-          fi
-
+          IMAGE_URI="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
+          echo "Verifying image exists in ECR: ${IMAGE_URI}"
+ 
+          aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPO }} \
+            --region ${{ env.AWS_REGION }} \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --query 'imageDetails[0].imageTags' \
+            --output text
+ 
+          echo "✅ Image confirmed in ECR"
+ 
       - name: Scan image for vulnerabilities (Trivy)
         uses: aquasecurity/trivy-action@master
         with:
@@ -139,53 +156,66 @@ jobs:
           format:    table
           exit-code: '0'
           severity:  'HIGH,CRITICAL'
-
+ 
       - name: Write build summary
         run: |
-          echo "### ✅ Backend Image Pushed to ECR" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Backend Image in ECR" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Image** | \`${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
-
-
+ 
+  # ════════════════════════════════════════════
+  # JOB 3 — DEPLOY TO EKS
+  # Reconstructs image URI from env vars directly.
+  # Never depends on job outputs — permanently reliable.
+  # ════════════════════════════════════════════
   deploy:
     name: Deploy Backend to EKS
     runs-on: ubuntu-latest
     needs: build-and-push
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
+ 
     environment:
       name: production
       url: https://shakachow.engrshakacloud.online/api/health
-
+ 
     steps:
-      # Fresh runner — must checkout again to access k8s/ manifests.
       - name: Checkout repository code
         uses: actions/checkout@v4
-
-      # Re-authenticate with AWS on this new runner.
+ 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region:            ${{ env.AWS_REGION }}
-
-      # Install kubectl CLI. Version matches EKS cluster version.
+ 
       - name: Install kubectl
         uses: azure/setup-kubectl@v3
         with:
           version: 'v1.29.0'
-
+ 
       - name: Connect kubectl to EKS cluster
         run: |
           aws eks update-kubeconfig \
             --region ${{ env.AWS_REGION }} \
             --name   ${{ env.EKS_CLUSTER_NAME }}
-
+ 
+      # Reconstruct the image URI from env vars.
+      # These four values are ALWAYS available — they are never empty:
+      #   AWS_ACCOUNT_ID → GitHub Secret you set (your 12-digit account number)
+      #   AWS_REGION     → GitHub Secret you set (us-east-1)
+      #   ECR_REPO       → hardcoded above as "shakachow-backend"
+      #   IMAGE_TAG      → github.sha, set by GitHub automatically
+      # Writing to $GITHUB_ENV makes IMAGE_URI available to ALL
+      # subsequent steps in this job as ${{ env.IMAGE_URI }}.
+      - name: Build image URI from env vars
+        run: |
+          IMAGE_URI="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
+          echo "✅ Image URI: ${IMAGE_URI}"
+ 
       - name: Apply Kubernetes manifests
         run: |
           kubectl apply -f k8s/namespaces/namespaces.yaml
@@ -193,49 +223,45 @@ jobs:
           kubectl apply -f k8s/backend/deployment.yaml          --namespace shakachow
           kubectl apply -f k8s/backend/service.yaml             --namespace shakachow
           kubectl apply -f k8s/backend/hpa.yaml                 --namespace shakachow
-
-      - name: Update backend deployment with new image
+ 
+      # Deploy using ${{ env.IMAGE_URI }} set in the step above.
+      # This value is constructed from 4 env vars that are always
+      # present — it can never be empty.
+      - name: Deploy new backend image to EKS
         run: |
-          IMAGE_URI="${{ needs.build-and-push.outputs.image_uri }}"
-          if [ -z "$IMAGE_URI" ]; then
-            echo "❌ Error: image_uri output is empty"
-            exit 1
-          fi
-          echo "Deploying image: $IMAGE_URI"
+          echo "Deploying: ${{ env.IMAGE_URI }}"
           kubectl set image deployment/shakachow-backend \
-            backend=$IMAGE_URI \
+            backend=${{ env.IMAGE_URI }} \
             --namespace shakachow
-
+ 
       - name: Wait for rollout to complete
         run: |
           kubectl rollout status deployment/shakachow-backend \
             --namespace shakachow \
             --timeout=300s
-
-      # Confirm pod health after rollout.
-      - name: Verify deployment health
+ 
+      - name: Verify pods are healthy
         run: |
-          echo "=== Pod status ==="
-          kubectl get pods \
-            --namespace shakachow \
-            --selector app=shakachow-backend \
-            --output wide
-          echo "=== Deployment status ==="
-          kubectl get deployment shakachow-backend --namespace shakachow
-
+          echo "=== Backend Pods ==="
+          kubectl get pods -n shakachow --selector app=shakachow-backend -o wide
+          echo "=== Deployment ==="
+          kubectl get deployment shakachow-backend -n shakachow
+ 
       - name: Rollback on failure
         if: failure()
         run: |
-          echo "🚨 Backend deployment failed — rolling back"
-          kubectl rollout undo deployment/shakachow-backend --namespace shakachow
-          kubectl rollout status deployment/shakachow-backend --namespace shakachow
-
+          echo "🚨 Deployment failed — rolling back"
+          if kubectl get deployment shakachow-backend -n shakachow 2>/dev/null; then
+            kubectl rollout undo deployment/shakachow-backend --namespace shakachow
+          else
+            echo "Deployment does not exist yet — nothing to roll back"
+          fi
+ 
       - name: Write deployment summary
         if: success()
         run: |
-          echo "### 🚀 Backend Deployed to EKS" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Backend Deployed" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Image** | \`${{ needs.build-and-push.outputs.image_uri }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Health check** | https://shakachow.engrshakacloud.online/api/health |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Actor** | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.IMAGE_URI }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **URL** | https://shakachow.engrshakacloud.online/api/health |" >> $GITHUB_STEP_SUMMARY
