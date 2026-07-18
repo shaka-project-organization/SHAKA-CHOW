@@ -223,10 +223,7 @@ jobs:
           kubectl apply -f k8s/backend/deployment.yaml          --namespace shakachow
           kubectl apply -f k8s/backend/service.yaml             --namespace shakachow
           kubectl apply -f k8s/backend/hpa.yaml                 --namespace shakachow
- 
-      # Deploy using ${{ env.IMAGE_URI }} set in the step above.
-      # This value is constructed from 4 env vars that are always
-      # present — it can never be empty.
+
       - name: Deploy new backend image to EKS
         run: |
           echo "Deploying: ${{ env.IMAGE_URI }}"

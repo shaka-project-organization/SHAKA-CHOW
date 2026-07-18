@@ -77,8 +77,6 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    outputs:
-      image_uri: ${{ steps.set-output.outputs.image_uri }}
 
     steps:
       - name: Checkout repository code
@@ -102,7 +100,6 @@ jobs:
 
     
       - name: Build and push frontend Docker image
-        id: build-push
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
@@ -117,15 +114,20 @@ jobs:
           cache-to:   type=gha,mode=max
 
       # Write the full image URI to GITHUB_OUTPUT so the deploy
- 
-      - name: Export image URI as job output
-        id: set-output
-        if: always()
+      - name: Confirm image exists in ECR
         run: |
           IMAGE_URI="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
-          echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
-          echo "Exported image_uri='$IMAGE_URI'"
-      # Scan the pushed image for known CVEs using Trivy.
+          echo "Verifying image exists in ECR: ${IMAGE_URI}"
+ 
+          aws ecr describe-images \
+            --repository-name ${{ env.ECR_REPO }} \
+            --region ${{ env.AWS_REGION }} \
+            --image-ids imageTag=${{ env.IMAGE_TAG }} \
+            --query 'imageDetails[0].imageTags' \
+            --output text
+ 
+          echo "✅ Image confirmed in ECR" 
+
 
       - name: Scan image for vulnerabilities (Trivy)
         uses: aquasecurity/trivy-action@master
@@ -184,6 +186,12 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --name   ${{ env.EKS_CLUSTER_NAME }}
 
+      - name: Build image URI from env vars
+        run: |
+          IMAGE_URI="${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPO }}:${{ env.IMAGE_TAG }}"
+          echo "IMAGE_URI=${IMAGE_URI}" >> $GITHUB_ENV
+          echo "✅ Image URI: ${IMAGE_URI}"
+ 
       - name: Apply Kubernetes manifests
         run: |
           kubectl apply -f k8s/namespaces/namespaces.yaml
@@ -191,19 +199,13 @@ jobs:
           kubectl apply -f k8s/frontend/service.yaml     --namespace shakachow
           kubectl apply -f k8s/frontend/hpa.yaml         --namespace shakachow
           kubectl apply -f k8s/ingress/ingress.yaml      --namespace shakachow
-
-      - name: Update frontend deployment with new image
+      - name: Deploy new backend image to EKS
         run: |
-          IMAGE_URI="${{ needs.build-and-push.outputs.image_uri }}"
-          if [ -z "$IMAGE_URI" ]; then
-            echo "❌ ERROR: image_uri output is empty!"
-            exit 1
-          fi
-          echo "Updating deployment with image: $IMAGE_URI"
-          kubectl set image deployment/shakachow-frontend \
-            frontend=$IMAGE_URI \
+          echo "Deploying: ${{ env.IMAGE_URI }}"
+          kubectl set image deployment/shakachow-backend \
+            backend=${{ env.IMAGE_URI }} \
             --namespace shakachow
-
+ 
       - name: Wait for rollout to complete
         run: |
           kubectl rollout status deployment/shakachow-frontend \
