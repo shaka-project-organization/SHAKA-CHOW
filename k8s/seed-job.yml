@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: shakachow-seeder
+  namespace: shakachow
+spec:
+  template:
+    spec:
+      containers:
+      - name: seeder
+        image: 467508858835.dkr.ecr.us-east-1.amazonaws.com/shakachow-backend:latest
+        command: ["node", "seed.js"]
+        envFrom:
+        - secretRef:
+            name: backend-secret
+      restartPolicy: Never
+  backoffLimit: 2

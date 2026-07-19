@@ -22,7 +22,7 @@ const restaurants = [
   },
   {
     name: 'SuYa Spot',
-    description: 'Northern Nigeria's finest grills, charcoal-kissed and spiced to perfection.',
+    description: "Northern Nigeria's finest grills, charcoal-kissed and spiced to perfection.",
     category: 'Grills',
     emoji: '🔥',
     rating: 4.9,

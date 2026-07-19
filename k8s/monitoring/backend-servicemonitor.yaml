@@ -1,6 +1,6 @@
 
 apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor   # Custom resource type from Prometheus Operator
+kind: ServiceMonitor   
 
 metadata:
   name: shakachow-backend-monitor
@@ -9,31 +9,15 @@ metadata:
   labels:
     app: shakachow-backend
     release: kube-prometheus-stack
-  
-
 spec:
   namespaceSelector:
     matchNames:
       - shakachow
-      # Only look for matching services in this namespace.
-
-  # selector: which Services to scrape. Prometheus finds the Service
   selector:
     matchLabels:
       app: shakachow-backend
-      # Matches the shakachow-backend-svc Service (which has this label).
-
-  # endpoints: how to scrape each matched Service.
   endpoints:
     - port: http
-      # "http" is the port name defined in the Service:
-      # ports.name: http → port 80 → targetPort 5000
-
       path: /api/health
-     
       interval: 15s
-      # Scrape every 15 seconds. Matches Prometheus global scrapeInterval.
-
       scrapeTimeout: 10s
-      # If the pod doesn't respond within 10 seconds, mark the scrape failed.
-      # 10 seconds is generous — /api/health should respond in < 100ms.
