@@ -1,73 +1,36 @@
-
 apiVersion: networking.k8s.io/v1
 kind: Ingress
-
 metadata:
   name: shakachow-ingress
   namespace: shakachow
   labels:
     app: shakachow
     environment: production
-
-
   annotations:
-
     kubernetes.io/ingress.class: "alb"
-
-
     alb.ingress.kubernetes.io/scheme: "internet-facing"
-
-
     alb.ingress.kubernetes.io/target-type: "ip"
-
-
     alb.ingress.kubernetes.io/load-balancer-name: "shakachow-alb"
-
     alb.ingress.kubernetes.io/subnets: "subnet-0d731bc2618602955, subnet-011496a893c93fd0e"
-
-
     alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-east-1:467508858835:certificate/eb45cea3-9b4b-4ace-a54f-24f86ada1a4b"
-
-
     alb.ingress.kubernetes.io/ssl-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
-
-
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
-
-
     alb.ingress.kubernetes.io/ssl-redirect: "443"
-
-
     alb.ingress.kubernetes.io/healthcheck-protocol: "HTTP"
-  
-
     alb.ingress.kubernetes.io/healthcheck-path: "/api/health"
-
-
     alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
-
-
     alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
-
-
     alb.ingress.kubernetes.io/healthy-threshold-count: "2"
-
-
     alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
-
-
     alb.ingress.kubernetes.io/tags: "Project=shakachow,Environment=production,ManagedBy=kubernetes"
-
-
     alb.ingress.kubernetes.io/target-group-attributes: "deregistration_delay.timeout_seconds=30"
 
 spec:
-
   ingressClassName: alb
 
   rules:
+    # 1. Your Main App (Shakachow)
     - host: shakachow.engrshakacloud.online
-
       http:
         paths:
           - path: /api
@@ -75,16 +38,25 @@ spec:
             backend:
               service:
                 name: shakachow-backend-svc
-
                 port:
                   number: 80
 
           - path: /
             pathType: Prefix
-
             backend:
               service:
                 name: shakachow-frontend-svc
-
                 port:
                   number: 80
+
+    # 2. Your Monitoring Dashboard (Grafana)
+    - host: grafana.engrshakacloud.online
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-svc  # Replace with your exact Grafana service name if different
+                port:
+                  number: 3000     # Replace with your Grafana service port if different
